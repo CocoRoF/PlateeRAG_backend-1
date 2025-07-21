@@ -44,7 +44,7 @@ class PerformanceController:
                     ) AS recent_logs
                     ORDER BY timestamp ASC
                 """
-                params = (workflow_name, workflow_id, limit)
+                params = [workflow_name, workflow_id, limit]
             else: # sqlite
                 query = """
                     SELECT * FROM (
@@ -55,7 +55,7 @@ class PerformanceController:
                     )
                     ORDER BY timestamp ASC
                 """
-                params = (workflow_name, workflow_id, limit)
+                params = [workflow_name, workflow_id, limit]
             
             results = self.db_manager.config_db_manager.execute_query(query, params)
             return [dict(row) for row in results] if results else []
@@ -270,7 +270,7 @@ class PerformanceController:
                 GROUP BY node_name
                 ORDER BY log_count DESC
             """
-            params = (workflow_name, workflow_id)
+            params = [workflow_name, workflow_id]
             results = self.db_manager.config_db_manager.execute_query(query, params)
 
             if not results:
