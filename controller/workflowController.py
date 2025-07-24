@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
@@ -823,3 +823,57 @@ async def _default_workflow_parameter_helper(request, request_body, workflow_dat
                         parameter['value'] = request_body.interaction_id
 
     return workflow_data
+
+@router.websocket("/execute/stream")
+async def execute_workflow_stream(websocket: WebSocket):
+    """
+    WebSocket을 통해 워크플로우를 스트리밍 방식으로 실행합니다.
+    """
+    await websocket.accept()
+    try:
+        initial_data = await websocket.receive_json()
+        request_body = WorkflowRequest(**initial_data)
+        user_id = websocket.headers.get("X-User-ID")
+        
+        if request_body.workflow_name == 'default_mode':
+            default_mode_workflow_folder = os.path.join(os.getcwd(), "constants")
+            file_path = os.path.join(default_mode_workflow_folder, "base_chat_workflow.json")
+            with open(file_path, 'r', encoding='utf-8') as f:
+                workflow_data = json.load(f)
+            workflow_data = await _default_workflow_parameter_helper(websocket, request_body, workflow_data)
+        else:
+            downloads_path = os.path.join(os.getcwd(), "downloads")
+            download_path_id = os.path.join(downloads_path, user_id)
+            filename = f"{request_body.workflow_name}.json" if not request_body.workflow_name.endswith('.json') else request_body.workflow_name
+            file_path = os.path.join(download_path_id, filename)
+            with open(file_path, 'r', encoding='utf-8') as f:
+                workflow_data = json.load(f)
+            workflow_data = await _workflow_parameter_helper(request_body, workflow_data)
+
+        if request_body.input_data is not None:
+            for node in workflow_data.get('nodes', []):
+                if node.get('data', {}).get('functionId') == 'startnode':
+                    parameters = node.get('data', {}).get('parameters', [])
+                    if parameters and isinstance(parameters, list):
+                        parameters[0]['value'] = request_body.input_data
+                        break
+
+        app_db = websocket.app.state.app_db
+        executor = WorkflowExecutor(workflow_data, app_db, request_body.interaction_id, user_id)
+
+        async for chunk in executor.stream_workflow():
+            await websocket.send_json(chunk)
+
+        await websocket.send_json({"type": "done", "message": "스트림이 성공적으로 종료되었습니다."})
+
+    except WebSocketDisconnect:
+        logger.warning("WebSocket connection closed by client.")
+    except Exception as e:
+        logger.error(f"WebSocket Error: {str(e)}")
+        await websocket.send_json({
+            "type": "error",
+            "message": f"오류가 발생했습니다: {str(e)}"
+        })
+    finally:
+        await websocket.close()
+        logger.info("WebSocket connection closed.")
